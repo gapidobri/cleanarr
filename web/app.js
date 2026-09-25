@@ -625,8 +625,11 @@ function watchedHTML(t) {
   const w = t.watch;
   if (!w) return `<span class="faint" title="Jellyfin has no item in this folder">Not in Jellyfin</span>${added}`;
   if (w.last) {
-    const who = w.users.length ? `Watched by ${w.users.join(", ")}` : "";
-    return `<span title="${esc(fmtDate(w.last))}${who ? `\n${esc(who)}` : ""}">${esc(timeAgo(w.last))}</span>${added}`;
+    const tip = [
+      w.lastUser ? `Last watched by ${w.lastUser} on ${fmtDate(w.last)}` : fmtDate(w.last),
+      w.users.length ? `Watched by ${w.users.join(", ")}` : "",
+    ].filter(Boolean).join("\n");
+    return `<span title="${esc(tip)}">${esc(timeAgo(w.last))}</span>${added}`;
   }
   if (w.users.length) return `<span class="muted" title="Watched by ${esc(w.users.join(", "))}">Marked watched</span>${added}`;
   return `<span class="never">Never</span>${added}`;

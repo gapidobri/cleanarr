@@ -326,6 +326,7 @@ func (s *Service) loadActivity(ctx context.Context, cfg config.Config, lib *libr
 				w := activity[dir]
 				if p.LastPlayed.After(w.Last) {
 					w.Last = p.LastPlayed
+					w.LastUser = u.Name
 				}
 				w.Plays += p.PlayCount
 				if p.Played || p.PlayCount > 0 || !p.LastPlayed.IsZero() {

@@ -33,9 +33,10 @@ const (
 
 // Watch is the watch history of a movie or series across media servers.
 type Watch struct {
-	Last  time.Time `json:"last,omitzero"` // zero when never played
-	Users []string  `json:"users"`         // who played it
-	Plays int       `json:"plays"`
+	Last     time.Time `json:"last,omitzero"`      // zero when never played
+	LastUser string    `json:"lastUser,omitempty"` // who played it at Last
+	Users    []string  `json:"users"`              // who played it
+	Plays    int       `json:"plays"`
 }
 
 // Key identifies file data independently of its path. Hardlinks share the
