@@ -77,13 +77,21 @@ type Ref struct {
 type Library struct {
 	Roots      []string
 	RecycleBin string
-	ItemDirs   map[string]Ref // movie / series folders
-	Files      map[string]Ref // tracked media files
-	TitlesByID map[int]string // movie or series id -> title
+	ItemDirs   map[string]Ref    // movie / series folders
+	Files      map[string]Ref    // tracked media files
+	Quality    map[string]string // tracked media file -> quality name, e.g. Bluray-2160p
+	TitlesByID map[int]string    // movie or series id -> title
+}
+
+// fileQuality is the quality object of a movie or episode file.
+type fileQuality struct {
+	Quality struct {
+		Name string `json:"name"`
+	} `json:"quality"`
 }
 
 func (c *Client) Library(ctx context.Context) (*Library, error) {
-	lib := &Library{ItemDirs: map[string]Ref{}, Files: map[string]Ref{}, TitlesByID: map[int]string{}}
+	lib := &Library{ItemDirs: map[string]Ref{}, Files: map[string]Ref{}, Quality: map[string]string{}, TitlesByID: map[int]string{}}
 
 	var roots []struct {
 		Path string `json:"path"`
@@ -132,8 +140,9 @@ func (c *Client) radarr(ctx context.Context, lib *Library) error {
 		Path      string `json:"path"`
 		HasFile   bool   `json:"hasFile"`
 		MovieFile *struct {
-			Path         string `json:"path"`
-			RelativePath string `json:"relativePath"`
+			Path         string      `json:"path"`
+			RelativePath string      `json:"relativePath"`
+			Quality      fileQuality `json:"quality"`
 		} `json:"movieFile"`
 	}
 	if err := c.get(ctx, "movie", nil, &movies); err != nil {
@@ -154,6 +163,7 @@ func (c *Client) radarr(ctx context.Context, lib *Library) error {
 		}
 		if p != "" {
 			lib.Files[filepath.Clean(p)] = ref
+			lib.Quality[filepath.Clean(p)] = m.MovieFile.Quality.Quality.Name
 		}
 	}
 	return nil
@@ -188,7 +198,8 @@ func (c *Client) sonarr(ctx context.Context, lib *Library) error {
 			defer wg.Done()
 			defer func() { <-sem }()
 			var files []struct {
-				Path string `json:"path"`
+				Path    string      `json:"path"`
+				Quality fileQuality `json:"quality"`
 			}
 			err := c.get(ctx, "episodefile", url.Values{"seriesId": {strconv.Itoa(id)}}, &files)
 			mu.Lock()
@@ -202,6 +213,7 @@ func (c *Client) sonarr(ctx context.Context, lib *Library) error {
 			for _, f := range files {
 				if f.Path != "" {
 					lib.Files[filepath.Clean(f.Path)] = ref
+					lib.Quality[filepath.Clean(f.Path)] = f.Quality.Quality.Name
 				}
 			}
 		}(s.ID, ref)

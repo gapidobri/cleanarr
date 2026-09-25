@@ -12,6 +12,15 @@ Finds media on your NAS that Sonarr and Radarr no longer use, and deletes it in 
 | Download leftovers | Files in your download paths that belong to no torrent and no tracked file. |
 | Recycle bin | Contents of the Sonarr/Radarr recycle bins, if configured. |
 
+## Space
+
+The Space page shows what fills your disks, measured by the last scan. Data with several hardlinks, like a movie that is also seeding, is counted once, at the library copy.
+
+- **Per disk:** how much each Sonarr/Radarr instance uses, how much is listed on Cleanup, extras (subtitles, artwork), torrents Cleanarr keeps, and what is used on the disk but **outside the scanned folders** (other shares, snapshots, `#recycle`, excluded paths).
+- **Titles:** every movie and series by size, with quality, size per file, how much is also seeding, and other files in its folder.
+- **Folders:** browse the scanned folders, largest first.
+- **Quality:** space per quality as reported by Sonarr and Radarr, e.g. how much is Remux-2160p.
+
 ## Deleting
 
 A file only frees space once **every hardlink** to it is gone. When deleting, Cleanarr:

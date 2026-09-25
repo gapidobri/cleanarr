@@ -117,6 +117,7 @@ func (s *Service) StartScan() error {
 type library struct {
 	roots, recycleBins []string
 	itemDirs, tracked  map[string]arr.Ref
+	quality            map[string]string
 	clients            []*arr.Client
 	titles             map[string]map[int]string // instance id -> id -> title
 }
@@ -124,7 +125,7 @@ type library struct {
 // loadLibrary queries every enabled *arr instance. Any failure is fatal:
 // without the full picture tracked media would look unused.
 func (s *Service) loadLibrary(ctx context.Context, cfg config.Config) (*library, error) {
-	lib := &library{itemDirs: map[string]arr.Ref{}, tracked: map[string]arr.Ref{}, titles: map[string]map[int]string{}}
+	lib := &library{itemDirs: map[string]arr.Ref{}, tracked: map[string]arr.Ref{}, quality: map[string]string{}, titles: map[string]map[int]string{}}
 	insts := cfg.Arrs()
 	if len(insts) == 0 {
 		return nil, errors.New("no Sonarr or Radarr instance configured")
@@ -168,6 +169,9 @@ func (s *Service) loadLibrary(ctx context.Context, cfg config.Config) (*library,
 		}
 		for k, v := range r.lib.Files {
 			lib.tracked[k] = v
+		}
+		for k, v := range r.lib.Quality {
+			lib.quality[k] = v
 		}
 	}
 	for _, root := range cfg.ExtraLibraryPaths {
@@ -258,6 +262,7 @@ func (s *Service) runScan(ctx context.Context) (*scanner.Result, error) {
 		DownloadPaths: cfg.DownloadPaths,
 		ItemDirs:      lib.itemDirs,
 		Tracked:       lib.tracked,
+		Quality:       lib.quality,
 		Torrents:      torrents,
 		Excluded:      cfg.ExcludedPaths,
 		IgnoredNames:  cfg.IgnoredNames,

@@ -43,7 +43,7 @@ func setup(t *testing.T) *env {
 
 	e.radarr = &fake.Arr{
 		Kind: "radarr", APIKey: "k", Roots: []string{e.movies},
-		Media:   []fake.Media{{ID: 1, Title: "Kept", Year: 2020, Path: filepath.Dir(e.tracked), Files: []string{e.tracked}}},
+		Media:   []fake.Media{{ID: 1, Title: "Kept", Year: 2020, Path: filepath.Dir(e.tracked), Files: []string{e.tracked}, Quality: "Bluray-1080p"}},
 		History: map[string]int{"OLD": 1},
 	}
 	e.qb = &fake.Qbit{Torrents: []*fake.Torrent{
@@ -164,5 +164,13 @@ func TestImportAfterScanIsKept(t *testing.T) {
 	}
 	if j.Status != Partial {
 		t.Fatalf("status %s, want partial", j.Status)
+	}
+}
+
+func TestSpaceUsesQualityFromRadarr(t *testing.T) {
+	e := setup(t)
+	sp := e.scan(t).Space
+	if len(sp.Titles) != 1 || sp.Titles[0].Title != "Kept (2020)" || sp.Titles[0].Qualities[0].Name != "Bluray-1080p" {
+		t.Fatalf("titles %+v", sp.Titles)
 	}
 }

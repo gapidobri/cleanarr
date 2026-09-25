@@ -187,3 +187,53 @@ func TestProtectedTorrentCategory(t *testing.T) {
 		}
 	}
 }
+
+func TestSpace(t *testing.T) {
+	f := newFixture(t)
+	f.in.Quality = map[string]string{f.movie: "Bluray-2160p"}
+	sp := Run(f.in).Space
+	movies := f.in.LibraryRoots[0]
+	dl := f.in.DownloadPaths[0]
+
+	// Hardlinked data is counted once: 100 tracked + 1 nfo + 52 old version
+	// + 30 unused torrent + 40 untracked folder + 21 leftover.
+	if sp.Size != 244 || sp.Apparent != 384 {
+		t.Fatalf("size=%d apparent=%d, want 244/384", sp.Size, sp.Apparent)
+	}
+	class := map[string]SpaceClass{}
+	for _, c := range sp.Classes {
+		class[c.Kind] = c
+	}
+	if c := class["radarr"]; c.Size != 100 || c.Seeding != 100 {
+		t.Errorf("radarr class %+v, want size 100, seeding 100", c)
+	}
+	if class["extras"].Size != 1 || class["cleanup"].Size != 143 || class["torrents"].Size != 0 || class["other"].Size != 0 {
+		t.Errorf("classes %+v", sp.Classes)
+	}
+
+	if len(sp.Titles) != 1 {
+		t.Fatalf("titles %+v", sp.Titles)
+	}
+	if tu := sp.Titles[0]; tu.Size != 100 || tu.Files != 1 || tu.Other != 53 || tu.Seeding != 100 || tu.Qualities[0].Name != "Bluray-2160p" {
+		t.Errorf("title %+v", tu)
+	}
+	if len(sp.Qualities) != 1 || sp.Qualities[0].Size != 100 || sp.Qualities[0].Titles != 1 {
+		t.Errorf("qualities %+v", sp.Qualities)
+	}
+
+	top, _ := sp.Dir("")
+	sizes := map[string]DirEntry{}
+	for _, e := range top.Entries {
+		sizes[e.Path] = e
+	}
+	if sizes[movies].Size != 193 || sizes[dl].Size != 51 || sizes[dl].Linked != 140 || top.Size != 244 {
+		t.Errorf("top level %+v", top.Entries)
+	}
+	d, ok := sp.Dir(filepath.Join(movies, "Movie (2020)"))
+	if !ok || d.Title != "Movie (2020)" || d.Top != movies || len(d.Entries) != 4 || d.Entries[0].Size != 100 {
+		t.Errorf("movie folder %+v", d)
+	}
+	if _, ok := sp.Dir(filepath.Join(movies, "@eaDir")); ok {
+		t.Error("ignored folder listed")
+	}
+}

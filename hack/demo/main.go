@@ -40,6 +40,24 @@ func ln(from, to string) string {
 	return to
 }
 
+// quality guesses the quality name Radarr or Sonarr would report.
+func quality(file string) string {
+	f := strings.ToLower(file)
+	res := "1080p"
+	for _, r := range []string{"2160p", "720p"} {
+		if strings.Contains(f, r) {
+			res = r
+		}
+	}
+	switch {
+	case strings.Contains(f, "remux"):
+		return "Remux-" + res
+	case strings.Contains(f, "web"):
+		return "WEBDL-" + res
+	}
+	return "Bluray-" + res
+}
+
 func must(err error) {
 	if err != nil {
 		log.Fatal(err)
@@ -80,7 +98,7 @@ func main() {
 			mk(p, size)
 		}
 		mk(filepath.Join(movies, dirName, "movie.nfo"), 0)
-		radarr.Media = append(radarr.Media, fake.Media{ID: id, Title: title, Year: year, Path: filepath.Join(movies, dirName), Files: []string{p}})
+		radarr.Media = append(radarr.Media, fake.Media{ID: id, Title: title, Year: year, Path: filepath.Join(movies, dirName), Files: []string{p}, Quality: quality(file)})
 		return filepath.Join(movies, dirName)
 	}
 	movie(1, "Arrival", 2016, "Arrival.2016.2160p.UHD.BluRay.x265-TERMiNAL.mkv", 21.4, "a1")
@@ -111,7 +129,7 @@ func main() {
 	// Radarr 4K
 	radarr4k := &fake.Arr{Kind: "radarr", APIKey: "radarr4k", Roots: []string{movies4k}, History: map[string]int{}}
 	p := mk(filepath.Join(movies4k, "Dune (2021)", "Dune.2021.2160p.UHD.BluRay.REMUX.HDR.HEVC.Atmos-TRiToN.mkv"), 64.2)
-	radarr4k.Media = append(radarr4k.Media, fake.Media{ID: 1, Title: "Dune", Year: 2021, Path: filepath.Dir(p), Files: []string{p}})
+	radarr4k.Media = append(radarr4k.Media, fake.Media{ID: 1, Title: "Dune", Year: 2021, Path: filepath.Dir(p), Files: []string{p}, Quality: quality(p)})
 	mk(filepath.Join(movies4k, "Tenet (2020)", "Tenet.2020.2160p.UHD.BluRay.REMUX.HDR.HEVC-FGT.mkv"), 58.7)
 
 	// Sonarr
@@ -140,7 +158,7 @@ func main() {
 				sonarr.History[strings.ToUpper(h)] = id
 			}
 		}
-		sonarr.Media = append(sonarr.Media, fake.Media{ID: id, Title: title, Year: year, Path: sdir, Files: files})
+		sonarr.Media = append(sonarr.Media, fake.Media{ID: id, Title: title, Year: year, Path: sdir, Files: files, Quality: "WEBDL-1080p"})
 		return sdir
 	}
 	sev := series(1, "Severance", 2022, 2, 9, 3.1, "d")

@@ -113,11 +113,13 @@ type Input struct {
 	DownloadPaths []string
 	ItemDirs      map[string]arr.Ref
 	Tracked       map[string]arr.Ref
-	Torrents      []Torrent
-	Excluded      []string
-	IgnoredNames  []string
-	MinAge        time.Duration
-	Now           time.Time
+	// Quality maps tracked files to the quality name the *arr app reports.
+	Quality      map[string]string
+	Torrents     []Torrent
+	Excluded     []string
+	IgnoredNames []string
+	MinAge       time.Duration
+	Now          time.Time
 	// Progress, if set, receives short status messages.
 	Progress func(string)
 }
@@ -133,6 +135,7 @@ type Result struct {
 	Warnings     []string  `json:"warnings"`
 
 	Index *Index `json:"-"`
+	Space *Space `json:"-"`
 }
 
 // Index is used to plan deletions after the scan.
@@ -245,6 +248,8 @@ func Run(in Input) *Result {
 	}
 	s.unusedTorrents()
 	s.leftovers(downloads, downloadRoot)
+	s.progress("Measuring space")
+	s.res.Space = s.space()
 
 	sort.Slice(s.res.Items, func(i, j int) bool { return s.res.Items[i].Size > s.res.Items[j].Size })
 	s.res.FinishedAt = time.Now()

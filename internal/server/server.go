@@ -32,6 +32,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/scan", s.scan)
 	mux.HandleFunc("GET /api/items", s.items)
 	mux.HandleFunc("POST /api/plan", s.plan)
+	mux.HandleFunc("GET /api/space", s.space)
+	mux.HandleFunc("GET /api/space/dir", s.spaceDir)
 	mux.HandleFunc("GET /api/jobs", s.jobs)
 	mux.HandleFunc("POST /api/jobs", s.createJob)
 	mux.HandleFunc("GET /api/jobs/{id}", s.job)
@@ -128,6 +130,29 @@ func (s *Server) items(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res.Items)
+}
+
+func (s *Server) space(w http.ResponseWriter, r *http.Request) {
+	res := s.svc.Result()
+	if res == nil || res.Space == nil {
+		writeJSON(w, http.StatusOK, map[string]any{})
+		return
+	}
+	writeJSON(w, http.StatusOK, res.Space)
+}
+
+func (s *Server) spaceDir(w http.ResponseWriter, r *http.Request) {
+	res := s.svc.Result()
+	if res == nil || res.Space == nil {
+		writeError(w, http.StatusNotFound, errors.New("no scan yet"))
+		return
+	}
+	d, ok := res.Space.Dir(r.URL.Query().Get("path"))
+	if !ok {
+		writeError(w, http.StatusNotFound, errors.New("folder not found in the last scan"))
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
 }
 
 type deleteRequest struct {

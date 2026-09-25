@@ -18,6 +18,12 @@ type Media struct {
 	Year  int
 	Path  string
 	Files []string // absolute paths of tracked files
+	// Quality is reported for every file, e.g. Bluray-1080p.
+	Quality string
+}
+
+func quality(name string) map[string]any {
+	return map[string]any{"quality": map[string]any{"name": name}}
 }
 
 type Arr struct {
@@ -60,7 +66,7 @@ func (a *Arr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, m := range a.Media {
 			mv := map[string]any{"id": m.ID, "title": m.Title, "year": m.Year, "path": m.Path, "hasFile": len(m.Files) > 0}
 			if len(m.Files) > 0 {
-				mv["movieFile"] = map[string]any{"path": m.Files[0], "relativePath": filepath.Base(m.Files[0])}
+				mv["movieFile"] = map[string]any{"path": m.Files[0], "relativePath": filepath.Base(m.Files[0]), "quality": quality(m.Quality)}
 			}
 			out = append(out, mv)
 		}
@@ -77,7 +83,7 @@ func (a *Arr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, m := range a.Media {
 			if m.ID == id {
 				for _, f := range m.Files {
-					out = append(out, map[string]any{"path": f})
+					out = append(out, map[string]any{"path": f, "quality": quality(m.Quality)})
 				}
 			}
 		}
