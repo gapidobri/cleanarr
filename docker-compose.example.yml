@@ -1,0 +1,14 @@
+services:
+  cleanarr:
+    # Replace <owner> with your GitHub user or organization.
+    image: ghcr.io/<owner>/cleanarr:latest
+    container_name: cleanarr
+    # Run as the same user as Sonarr/Radarr so cleanarr may delete their files.
+    user: "1000:1000"
+    ports:
+      - "9797:9797"
+    volumes:
+      - ./config:/config
+      # Mount the NAS at exactly the same paths Sonarr and Radarr use.
+      - /mnt/nas/data:/data
+    restart: unless-stopped
