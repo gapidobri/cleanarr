@@ -313,9 +313,11 @@ func (q *jobQueue) execute(ctx context.Context, j *Job) {
 		for _, inst := range cfg.EnabledQbit() {
 			clients[inst.ID] = qbit.New(inst)
 		}
+		// Check every torrent first, then remove them in batches per client:
+		// waiting for qBittorrent one torrent at a time is slow.
+		batches := map[*qbit.Client][]PlanTorrent{}
 		for _, t := range p.Torrents {
-			tid := t.ID()
-			files := p.torrentFile[tid]
+			files := p.torrentFile[t.ID()]
 			var problem error
 			for _, f := range files {
 				if _, err := os.Lstat(f); errors.Is(err, fs.ErrNotExist) {
@@ -333,23 +335,17 @@ func (q *jobQueue) execute(ctx context.Context, j *Job) {
 			case c == nil:
 				q.logf(j, "error", "Kept torrent %q: qBittorrent instance %s is no longer configured", t.Name, t.ClientName)
 			default:
-				if err := c.Delete(ctx, []string{t.Hash}); err != nil {
-					q.logf(j, "error", "Removing torrent %q failed: %v", t.Name, err)
-					break
-				}
-				q.waitGone(ctx, c, t.Hash)
-				// qBittorrent deletes data asynchronously and may leave files
-				// behind; remove whatever is left.
-				for _, f := range files {
-					if err := safe.linkOK(f); err == nil {
-						q.removeFile(j, f)
-					}
-					pruneDirs[filepath.Dir(f)] = true
-				}
-				q.update(j, func(j *Job) { j.RemovedTorrents++ })
-				q.logf(j, "info", "Removed torrent %q from %s", t.Name, t.ClientName)
+				batches[c] = append(batches[c], t)
+				continue
 			}
 			q.update(j, func(j *Job) { j.Done++ })
+		}
+		for c, ts := range batches {
+			for len(ts) > 0 {
+				n := min(len(ts), torrentBatch)
+				q.removeTorrents(ctx, j, safe, c, ts[:n], pruneDirs)
+				ts = ts[n:]
+			}
 		}
 	}
 
@@ -452,19 +448,55 @@ func freedBytes(p *Plan) int64 {
 	return freed
 }
 
-func (q *jobQueue) waitGone(ctx context.Context, c *qbit.Client, hash string) {
+// torrentBatch caps how many hashes go into one request.
+const torrentBatch = 50
+
+// removeTorrents deletes ts from c in one request and then removes whatever
+// data qBittorrent left behind.
+func (q *jobQueue) removeTorrents(ctx context.Context, j *Job, safe *safety, c *qbit.Client, ts []PlanTorrent, pruneDirs map[string]bool) {
+	hashes := make([]string, len(ts))
+	for i, t := range ts {
+		hashes[i] = t.Hash
+	}
+	if err := c.Delete(ctx, hashes); err != nil {
+		for _, t := range ts {
+			q.logf(j, "error", "Removing torrent %q failed: %v", t.Name, err)
+		}
+		q.update(j, func(j *Job) { j.Done += len(ts) })
+		return
+	}
+	q.waitGone(ctx, c, hashes)
+	for _, t := range ts {
+		// qBittorrent deletes data asynchronously and may leave files
+		// behind; remove whatever is left.
+		for _, f := range safe.plan.torrentFile[t.ID()] {
+			if err := safe.linkOK(f); err == nil {
+				q.removeFile(j, f)
+			}
+			pruneDirs[filepath.Dir(f)] = true
+		}
+		q.update(j, func(j *Job) { j.RemovedTorrents++; j.Done++ })
+		q.logf(j, "info", "Removed torrent %q from %s", t.Name, t.ClientName)
+	}
+}
+
+// waitGone waits until qBittorrent no longer knows any of hashes.
+func (q *jobQueue) waitGone(ctx context.Context, c *qbit.Client, hashes []string) {
 	deadline := time.Now().Add(time.Minute)
 	for time.Now().Before(deadline) {
-		exists, err := c.Exists(ctx, []string{hash})
-		if err == nil && !exists[hash] {
+		exists, err := c.Exists(ctx, hashes)
+		if err == nil && len(exists) == 0 {
 			// Give qBittorrent a moment to finish removing data.
-			time.Sleep(2 * time.Second)
+			select {
+			case <-ctx.Done():
+			case <-time.After(2 * time.Second):
+			}
 			return
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(time.Second):
+		case <-time.After(500 * time.Millisecond):
 		}
 	}
 }
