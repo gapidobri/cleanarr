@@ -46,12 +46,15 @@ func (c *Client) login(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) == "Fails." {
+	// Older versions answer 200 "Ok.", newer ones 204 with an empty body.
+	if !ok(resp.StatusCode) || strings.TrimSpace(string(body)) == "Fails." {
 		return fmt.Errorf("%s: login failed: %s %s", c.inst.Name, resp.Status, strings.TrimSpace(string(body)))
 	}
 	c.loggedIn = true
 	return nil
 }
+
+func ok(code int) bool { return code >= 200 && code < 300 }
 
 func (c *Client) do(ctx context.Context, method, path string, form url.Values, out any) error {
 	c.mu.Lock()
@@ -83,7 +86,8 @@ func (c *Client) do(ctx context.Context, method, path string, form url.Values, o
 		if err != nil {
 			return fmt.Errorf("%s: %w", c.inst.Name, err)
 		}
-		if resp.StatusCode == http.StatusForbidden && attempt == 0 {
+		// The session expired: 403 on older versions, 401 on newer ones.
+		if (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized) && attempt == 0 {
 			resp.Body.Close()
 			c.mu.Lock()
 			err := c.login(ctx)
@@ -94,7 +98,7 @@ func (c *Client) do(ctx context.Context, method, path string, form url.Values, o
 			continue
 		}
 		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
+		if !ok(resp.StatusCode) {
 			msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			return fmt.Errorf("%s: %s %s: %s %s", c.inst.Name, method, path, resp.Status, strings.TrimSpace(string(msg)))
 		}
