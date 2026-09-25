@@ -97,18 +97,19 @@ async function loadStatus() {
 
   const scanDone = prev && prev.scan.running && !s.scan.running;
   const jobsDone = prev && prev.activeJobs > 0 && s.activeJobs === 0;
+  const watchDone = prev && prev.scan.watch && !s.scan.watch && !s.scan.running;
   if (scanDone) {
     if (s.scan.error) toast(`Scan failed: ${esc(s.scan.error)}`, "err");
     else toast(`Scan finished. ${esc(s.scan.message)}.`);
   }
   if (scanDone || jobsDone) await loadItems();
-  if (scanDone && space.loaded) await loadSpace().catch(() => {});
+  if ((scanDone || watchDone) && space.loaded) await loadSpace().catch(() => {});
   if (jobsDone) {
     await loadJobs();
     toast(`Deletion finished. <a href="#/activity">See what was deleted</a>`);
   }
   if (state.route === "activity" && (s.activeJobs > 0 || jobsDone)) await refreshActivity();
-  if (scanDone || jobsDone || (prev && prev.scan.running !== s.scan.running)) render();
+  if (scanDone || jobsDone || (watchDone && state.route === "space") || (prev && prev.scan.running !== s.scan.running)) render();
 }
 
 async function loadItems() {
@@ -121,7 +122,7 @@ async function loadConfig() { state.config = await api("GET", "/api/config"); }
 async function loadJobs() { state.jobs = await api("GET", "/api/jobs"); }
 
 function schedulePoll() {
-  const busy = state.status && (state.status.scan.running || state.status.activeJobs > 0);
+  const busy = state.status && (state.status.scan.running || state.status.scan.watch || state.status.activeJobs > 0);
   setTimeout(async () => { await loadStatus(); schedulePoll(); }, busy ? 1500 : 5000);
 }
 
@@ -131,6 +132,8 @@ function renderScanState() {
   if (!s) return;
   if (s.scan.running) {
     el.innerHTML = `<span class="spin"></span><span class="msg">${esc(s.scan.message)}</span>`;
+  } else if (s.scan.watch) {
+    el.innerHTML = `<span class="spin"></span><span class="msg">${esc(s.scan.watch)}</span>`;
   } else if (s.lastScan) {
     el.innerHTML = `<span class="msg">Scanned ${esc(timeAgo(s.lastScan.finishedAt))}</span>`;
   } else {
@@ -655,7 +658,9 @@ function titlesHTML() {
 
   const watchChips = d.watched ? `<div class="cats"><span class="cats-label">Not watched in</span>
     ${UNWATCHED.map(([days, label]) => `<button class="cat" data-act="space-unwatched" data-days="${days}" aria-pressed="${space.unwatched === days}">${label}</button>`).join("")}
-  </div>` : state.config?.jellyfin?.some((j) => j.enabled)
+  </div>` : d.watchLoading
+    ? `<p class="tab-note">Loading watch history from Jellyfin. The Last watched column appears when it is ready.</p>`
+    : state.config?.jellyfin?.some((j) => j.enabled)
     ? `<p class="tab-note warn-note">No watch history from Jellyfin. See the scan warnings on the <a href="#/system">System</a> page.</p>` : "";
   const chips = watchChips + (arrs.length > 1 || space.quality ? `<div class="cats">
     ${arrs.length > 1 ? `<button class="cat" data-act="space-arr" data-class="" aria-pressed="${!space.arr}">All</button>

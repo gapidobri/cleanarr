@@ -23,6 +23,8 @@ type Space struct {
 	Qualities []QualityUsage `json:"qualities"`
 	// Watched is true when titles carry watch history from a media server.
 	Watched bool `json:"watched"`
+	// WatchLoading is true while watch history is still being loaded.
+	WatchLoading bool `json:"watchLoading"`
 
 	dirs   map[string]*dirUsage
 	tops   []string

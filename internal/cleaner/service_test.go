@@ -79,7 +79,7 @@ func (e *env) scan(t *testing.T) *scanner.Result {
 	if err := e.svc.StartScan(); err != nil {
 		t.Fatal(err)
 	}
-	for e.svc.ScanState().Running {
+	for st := e.svc.ScanState(); st.Running || st.Watch != ""; st = e.svc.ScanState() {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if st := e.svc.ScanState(); st.Error != "" {

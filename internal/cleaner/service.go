@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +26,9 @@ type ScanState struct {
 	Message   string    `json:"message"`
 	Error     string    `json:"error,omitempty"`
 	StartedAt time.Time `json:"startedAt,omitzero"`
+	// Watch describes the watch history loading in the background after a
+	// scan; empty when it is not loading.
+	Watch string `json:"watch,omitempty"`
 }
 
 type Service struct {
@@ -36,6 +40,11 @@ type Service struct {
 	scan   ScanState
 
 	jobs *jobQueue
+
+	// watchGen identifies the result that background watch history loading
+	// belongs to; stopWatch cancels it.
+	watchGen  int
+	stopWatch context.CancelFunc
 }
 
 func New(cfg *config.Store, dataDir string) *Service {
@@ -98,7 +107,8 @@ func (s *Service) StartScan() error {
 	s.mu.Unlock()
 
 	go func() {
-		res, err := s.runScan(context.Background())
+		cfg := s.cfg.Get()
+		res, lib, err := s.runScan(context.Background(), cfg)
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.scan.Running = false
@@ -108,11 +118,67 @@ func (s *Service) StartScan() error {
 			log.Printf("scan failed: %v", err)
 			return
 		}
+		// Watch history is slow to load, so the result is shown without it
+		// and completed in the background.
+		if s.stopWatch != nil {
+			s.stopWatch()
+			s.stopWatch = nil
+		}
+		s.watchGen++
+		s.scan.Watch = ""
+		if len(cfg.EnabledJellyfin()) > 0 {
+			res.Space.WatchLoading = true
+			s.scan.Watch = "Loading watch history"
+			ctx, cancel := context.WithCancel(context.Background())
+			s.stopWatch = cancel
+			go s.loadWatchHistory(ctx, s.watchGen, cfg, lib)
+		}
 		s.result = res
 		s.scan.Message = fmt.Sprintf("Found %d items", len(res.Items))
 		log.Printf("scan finished: %d items, %d files in %s", len(res.Items), res.FilesScanned, res.FinishedAt.Sub(res.StartedAt).Round(time.Second))
 	}()
 	return nil
+}
+
+// loadWatchHistory adds watch history to the result of scan gen, unless a
+// newer scan replaced it in the meantime.
+func (s *Service) loadWatchHistory(ctx context.Context, gen int, cfg config.Config, lib *library) {
+	start := time.Now()
+	activity, warnings := s.loadActivity(ctx, cfg, lib, func(msg string) {
+		s.mu.Lock()
+		if gen == s.watchGen {
+			s.scan.Watch = msg
+		}
+		s.mu.Unlock()
+	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if gen != s.watchGen {
+		return
+	}
+	s.scan.Watch = ""
+	s.stopWatch = nil
+	cur := s.result
+	if cur == nil || cur.Space == nil {
+		return
+	}
+	// Handlers read the result without the lock, so replace it rather than
+	// changing it in place.
+	sp := *cur.Space
+	sp.WatchLoading = false
+	sp.Watched = activity != nil
+	sp.Titles = make([]scanner.TitleUsage, len(cur.Space.Titles))
+	for i, t := range cur.Space.Titles {
+		if w, ok := activity[t.Path]; ok {
+			t.Watch = &w
+		}
+		sp.Titles[i] = t
+	}
+	res := *cur
+	res.Space = &sp
+	res.Warnings = append(slices.Clip(cur.Warnings), warnings...)
+	s.result = &res
+	log.Printf("watch history loaded in %s", time.Since(start).Round(time.Second))
 }
 
 // library is the union of everything the *arr instances track.
@@ -246,19 +312,17 @@ func (s *Service) loadTorrents(ctx context.Context, cfg config.Config) ([]scanne
 	return out, clients, nil
 }
 
-func (s *Service) runScan(ctx context.Context) (*scanner.Result, error) {
-	cfg := s.cfg.Get()
+func (s *Service) runScan(ctx context.Context, cfg config.Config) (*scanner.Result, *library, error) {
 	s.setMessage("Loading Sonarr and Radarr libraries")
 	lib, err := s.loadLibrary(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	s.setMessage("Loading torrents")
 	torrents, _, err := s.loadTorrents(ctx, cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	activity, watchWarnings := s.loadActivity(ctx, cfg, lib)
 	res := scanner.Run(scanner.Input{
 		LibraryRoots:  lib.roots,
 		RecycleBins:   lib.recycleBins,
@@ -266,23 +330,21 @@ func (s *Service) runScan(ctx context.Context) (*scanner.Result, error) {
 		ItemDirs:      lib.itemDirs,
 		Tracked:       lib.tracked,
 		Quality:       lib.quality,
-		Activity:      activity,
 		Torrents:      torrents,
 		Excluded:      cfg.ExcludedPaths,
 		IgnoredNames:  cfg.IgnoredNames,
 		MinAge:        time.Duration(cfg.MinAgeHours) * time.Hour,
 		Progress:      s.setMessage,
 	})
-	res.Warnings = append(res.Warnings, watchWarnings...)
 	s.setMessage("Looking up download history")
 	s.labelTorrents(ctx, res, lib)
-	return res, nil
+	return res, lib, nil
 }
 
 // loadActivity reads the watch history of every user of every Jellyfin
 // server and assigns it to movie and series folders. It returns nil when no
 // history is available. Jellyfin is informational, so failures are warnings.
-func (s *Service) loadActivity(ctx context.Context, cfg config.Config, lib *library) (map[string]scanner.Watch, []string) {
+func (s *Service) loadActivity(ctx context.Context, cfg config.Config, lib *library, progress func(string)) (map[string]scanner.Watch, []string) {
 	servers := cfg.EnabledJellyfin()
 	if len(servers) == 0 {
 		return nil, nil
@@ -302,16 +364,45 @@ func (s *Service) loadActivity(ctx context.Context, cfg config.Config, lib *libr
 	}
 	loaded := false
 	for _, inst := range servers {
-		s.setMessage("Loading watch history from " + inst.Name)
+		progress("Loading watch history from " + inst.Name)
 		c := jellyfin.New(inst)
 		list, err := c.Users(ctx)
 		if err != nil {
 			warnings = append(warnings, "watch history from "+inst.Name+" skipped: "+err.Error())
 			continue
 		}
+		// Each user's history is a full listing of the library, so load
+		// several at once.
+		type userPlays struct {
+			plays []jellyfin.Play
+			err   error
+		}
+		got := make([]userPlays, len(list))
+		var (
+			wg   sync.WaitGroup
+			mu   sync.Mutex
+			done int
+			sem  = make(chan struct{}, 4)
+		)
+		for i, u := range list {
+			wg.Go(func() {
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				plays, err := c.Plays(ctx, u.ID)
+				got[i] = userPlays{plays, err}
+				mu.Lock()
+				done++
+				progress(fmt.Sprintf("Loading watch history from %s (%d of %d users)", inst.Name, done, len(list)))
+				mu.Unlock()
+			})
+		}
+		wg.Wait()
+		if ctx.Err() != nil {
+			return nil, nil
+		}
 		matched, total := 0, 0
-		for _, u := range list {
-			plays, err := c.Plays(ctx, u.ID)
+		for i, u := range list {
+			plays, err := got[i].plays, got[i].err
 			if err != nil {
 				warnings = append(warnings, "watch history of "+u.Name+" on "+inst.Name+" skipped: "+err.Error())
 				continue
