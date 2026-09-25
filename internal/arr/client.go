@@ -71,6 +71,7 @@ type Ref struct {
 	InstanceName string         `json:"instanceName"`
 	Kind         config.ArrKind `json:"kind"`
 	Title        string         `json:"title"`
+	Added        time.Time      `json:"added,omitzero"`
 }
 
 // Library is everything an instance tracks.
@@ -121,8 +122,12 @@ func (c *Client) Library(ctx context.Context) (*Library, error) {
 	return nil, fmt.Errorf("unknown kind %q", c.inst.Kind)
 }
 
-func (c *Client) ref(title string) Ref {
-	return Ref{InstanceID: c.inst.ID, InstanceName: c.inst.Name, Kind: c.inst.Kind, Title: title}
+func (c *Client) ref(title, added string) Ref {
+	r := Ref{InstanceID: c.inst.ID, InstanceName: c.inst.Name, Kind: c.inst.Kind, Title: title}
+	if t, err := time.Parse(time.RFC3339, added); err == nil && t.Year() > 1970 {
+		r.Added = t
+	}
+	return r
 }
 
 func titleYear(title string, year int) string {
@@ -138,6 +143,7 @@ func (c *Client) radarr(ctx context.Context, lib *Library) error {
 		Title     string `json:"title"`
 		Year      int    `json:"year"`
 		Path      string `json:"path"`
+		Added     string `json:"added"`
 		HasFile   bool   `json:"hasFile"`
 		MovieFile *struct {
 			Path         string      `json:"path"`
@@ -149,7 +155,7 @@ func (c *Client) radarr(ctx context.Context, lib *Library) error {
 		return err
 	}
 	for _, m := range movies {
-		ref := c.ref(titleYear(m.Title, m.Year))
+		ref := c.ref(titleYear(m.Title, m.Year), m.Added)
 		lib.TitlesByID[m.ID] = ref.Title
 		if m.Path != "" {
 			lib.ItemDirs[filepath.Clean(m.Path)] = ref
@@ -175,6 +181,7 @@ func (c *Client) sonarr(ctx context.Context, lib *Library) error {
 		Title string `json:"title"`
 		Year  int    `json:"year"`
 		Path  string `json:"path"`
+		Added string `json:"added"`
 	}
 	if err := c.get(ctx, "series", nil, &series); err != nil {
 		return err
@@ -187,7 +194,7 @@ func (c *Client) sonarr(ctx context.Context, lib *Library) error {
 		sem      = make(chan struct{}, 8)
 	)
 	for _, s := range series {
-		ref := c.ref(titleYear(s.Title, s.Year))
+		ref := c.ref(titleYear(s.Title, s.Year), s.Added)
 		lib.TitlesByID[s.ID] = ref.Title
 		if s.Path != "" {
 			lib.ItemDirs[filepath.Clean(s.Path)] = ref

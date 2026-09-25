@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"cleanarr/internal/arr"
 	"cleanarr/internal/config"
+	"cleanarr/internal/jellyfin"
 	"cleanarr/internal/qbit"
 	"cleanarr/internal/scanner"
 )
@@ -256,6 +258,7 @@ func (s *Service) runScan(ctx context.Context) (*scanner.Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	activity, watchWarnings := s.loadActivity(ctx, cfg, lib)
 	res := scanner.Run(scanner.Input{
 		LibraryRoots:  lib.roots,
 		RecycleBins:   lib.recycleBins,
@@ -263,15 +266,96 @@ func (s *Service) runScan(ctx context.Context) (*scanner.Result, error) {
 		ItemDirs:      lib.itemDirs,
 		Tracked:       lib.tracked,
 		Quality:       lib.quality,
+		Activity:      activity,
 		Torrents:      torrents,
 		Excluded:      cfg.ExcludedPaths,
 		IgnoredNames:  cfg.IgnoredNames,
 		MinAge:        time.Duration(cfg.MinAgeHours) * time.Hour,
 		Progress:      s.setMessage,
 	})
+	res.Warnings = append(res.Warnings, watchWarnings...)
 	s.setMessage("Looking up download history")
 	s.labelTorrents(ctx, res, lib)
 	return res, nil
+}
+
+// loadActivity reads the watch history of every user of every Jellyfin
+// server and assigns it to movie and series folders. It returns nil when no
+// history is available. Jellyfin is informational, so failures are warnings.
+func (s *Service) loadActivity(ctx context.Context, cfg config.Config, lib *library) (map[string]scanner.Watch, []string) {
+	servers := cfg.EnabledJellyfin()
+	if len(servers) == 0 {
+		return nil, nil
+	}
+	var warnings []string
+	activity := map[string]scanner.Watch{}
+	users := map[string]map[string]bool{}
+	dirOf := func(p string) string {
+		for d := p; ; d = filepath.Dir(d) {
+			if _, ok := lib.itemDirs[d]; ok {
+				return d
+			}
+			if d == filepath.Dir(d) {
+				return ""
+			}
+		}
+	}
+	loaded := false
+	for _, inst := range servers {
+		s.setMessage("Loading watch history from " + inst.Name)
+		c := jellyfin.New(inst)
+		list, err := c.Users(ctx)
+		if err != nil {
+			warnings = append(warnings, "watch history from "+inst.Name+" skipped: "+err.Error())
+			continue
+		}
+		matched, total := 0, 0
+		for _, u := range list {
+			plays, err := c.Plays(ctx, u.ID)
+			if err != nil {
+				warnings = append(warnings, "watch history of "+u.Name+" on "+inst.Name+" skipped: "+err.Error())
+				continue
+			}
+			for _, p := range plays {
+				total++
+				dir := dirOf(p.Path)
+				if dir == "" {
+					continue
+				}
+				matched++
+				w := activity[dir]
+				if p.LastPlayed.After(w.Last) {
+					w.Last = p.LastPlayed
+				}
+				w.Plays += p.PlayCount
+				if p.Played || p.PlayCount > 0 || !p.LastPlayed.IsZero() {
+					if users[dir] == nil {
+						users[dir] = map[string]bool{}
+					}
+					users[dir][u.Name] = true
+				}
+				activity[dir] = w
+			}
+		}
+		switch {
+		case total > 0 && matched == 0:
+			warnings = append(warnings, fmt.Sprintf("none of the %d items in %s are in a Sonarr or Radarr folder; check its path mappings in Settings", total, inst.Name))
+		case matched > 0:
+			loaded = true
+		}
+	}
+	if !loaded {
+		return nil, warnings
+	}
+	for dir, w := range activity {
+		w.Users = []string{}
+		for name := range users[dir] {
+			w.Users = append(w.Users, name)
+		}
+		sort.Strings(w.Users)
+		activity[dir] = w
+	}
+	return activity, warnings
 }
 
 // labelTorrents uses the *arr download history to name the movie or series
@@ -382,6 +466,18 @@ func TestArr(ctx context.Context, inst config.ArrInstance) (string, error) {
 		return "", fmt.Errorf("this is %s, not %s", st.AppName, inst.Kind)
 	}
 	return fmt.Sprintf("%s %s", st.AppName, st.Version), nil
+}
+
+func TestJellyfin(ctx context.Context, inst config.JellyfinInstance) (string, error) {
+	info, err := jellyfin.New(inst).Info(ctx)
+	if err != nil {
+		return "", err
+	}
+	users, err := jellyfin.New(inst).Users(ctx)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s (Jellyfin %s), %d users", info.ServerName, info.Version, len(users)), nil
 }
 
 func TestQbit(ctx context.Context, inst config.QbitInstance) (string, error) {

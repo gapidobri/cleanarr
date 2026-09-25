@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -188,21 +187,4 @@ func (c *Client) Exists(ctx context.Context, hashes []string) (map[string]bool, 
 }
 
 // LocalPath maps a path as seen by qBittorrent to the local filesystem.
-func (c *Client) LocalPath(p string) string {
-	p = filepath.Clean(filepath.FromSlash(p))
-	best := -1
-	var out string
-	for _, m := range c.inst.PathMappings {
-		remote := filepath.Clean(m.Remote)
-		if p == remote || strings.HasPrefix(p, remote+string(filepath.Separator)) {
-			if len(remote) > best {
-				best = len(remote)
-				out = filepath.Join(filepath.Clean(m.Local), strings.TrimPrefix(p, remote))
-			}
-		}
-	}
-	if best < 0 {
-		return p
-	}
-	return out
-}
+func (c *Client) LocalPath(p string) string { return config.MapPath(p, c.inst.PathMappings) }

@@ -17,7 +17,7 @@ Finds media on your NAS that Sonarr and Radarr no longer use, and deletes it in 
 The Space page shows what fills your disks, measured by the last scan. Data with several hardlinks, like a movie that is also seeding, is counted once, at the library copy.
 
 - **Per disk:** how much each Sonarr/Radarr instance uses, how much is listed on Cleanup, extras (subtitles, artwork), torrents Cleanarr keeps, and what is used on the disk but **outside the scanned folders** (other shares, snapshots, `#recycle`, excluded paths).
-- **Titles:** every movie and series by size, with quality, size per file, how much is also seeding, and other files in its folder.
+- **Titles:** every movie and series by size, with quality, size per file, how much is also seeding, and other files in its folder. With Jellyfin connected it also shows when each title was last watched, by any user, and can list only the titles nobody watched in 3 months to 2 years.
 - **Folders:** browse the scanned folders, largest first.
 - **Quality:** space per quality as reported by Sonarr and Radarr, e.g. how much is Remux-2160p.
 
@@ -61,7 +61,8 @@ Open `http://<server>:9797` and, in Settings:
 1. Add each Sonarr and Radarr instance (URL and API key). Root folders and recycle bins are read from them automatically.
 2. Add qBittorrent. Limit it to the categories your *arr apps use (e.g. `radarr, tv-sonarr`) so other torrents are never touched. If qBittorrent sees different paths, add a path mapping like `/downloads => /data/torrents`.
 3. Add your download folder (e.g. `/data/torrents`) under **Download paths**.
-4. Go to Cleanup and select **Scan now**.
+4. Optionally add Jellyfin (URL and an API key from Dashboard, API Keys) to see watch history on the Space page. Cleanarr only reads from it. If Jellyfin sees the library at other paths, add a path mapping like `/movies => /data/media/movies`.
+5. Go to Cleanup and select **Scan now**.
 
 There is no authentication, so only run it on a trusted network.
 
@@ -75,7 +76,7 @@ Hardlink detection needs Linux or macOS. Hardlinks are matched by inode, size an
 
 ```sh
 go test ./...
-go run ./hack/demo -dir /tmp/cleanarr-demo       # fake library + fake Sonarr/Radarr/qBittorrent
+go run ./hack/demo -dir /tmp/cleanarr-demo       # fake library + fake Sonarr/Radarr/qBittorrent/Jellyfin
 go run . -config /tmp/cleanarr-demo/config         # then open http://localhost:9797
 ```
 

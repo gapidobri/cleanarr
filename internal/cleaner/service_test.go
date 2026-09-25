@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,7 +44,7 @@ func setup(t *testing.T) *env {
 
 	e.radarr = &fake.Arr{
 		Kind: "radarr", APIKey: "k", Roots: []string{e.movies},
-		Media:   []fake.Media{{ID: 1, Title: "Kept", Year: 2020, Path: filepath.Dir(e.tracked), Files: []string{e.tracked}, Quality: "Bluray-1080p"}},
+		Media:   []fake.Media{{ID: 1, Title: "Kept", Year: 2020, Path: filepath.Dir(e.tracked), Files: []string{e.tracked}, Quality: "Bluray-1080p", Added: time.Date(2021, 5, 1, 0, 0, 0, 0, time.UTC)}},
 		History: map[string]int{"OLD": 1},
 	}
 	e.qb = &fake.Qbit{Torrents: []*fake.Torrent{
@@ -172,5 +173,54 @@ func TestSpaceUsesQualityFromRadarr(t *testing.T) {
 	sp := e.scan(t).Space
 	if len(sp.Titles) != 1 || sp.Titles[0].Title != "Kept (2020)" || sp.Titles[0].Qualities[0].Name != "Bluray-1080p" {
 		t.Fatalf("titles %+v", sp.Titles)
+	}
+}
+
+func (e *env) addJellyfin(t *testing.T, jf *fake.Jellyfin, mappings []config.PathMapping) {
+	t.Helper()
+	srv := httptest.NewServer(jf)
+	t.Cleanup(srv.Close)
+	c := e.svc.cfg.Get()
+	c.Jellyfin = []config.JellyfinInstance{{Name: "Jellyfin", URL: srv.URL, APIKey: "jf", Enabled: true, PathMappings: mappings}}
+	if err := e.svc.cfg.Set(c); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWatchHistoryFromJellyfin(t *testing.T) {
+	e := setup(t)
+	last := time.Date(2025, 3, 1, 20, 0, 0, 0, time.UTC)
+	// Jellyfin sees the movies folder as /movies.
+	e.addJellyfin(t, &fake.Jellyfin{APIKey: "jf", Users: []string{"alice", "bob"}, Items: []fake.JellyfinItem{
+		{Type: "Movie", Path: "/movies/Kept (2020)/Kept.mkv", Plays: map[string]fake.JellyfinPlay{
+			"alice": {LastPlayed: last, Count: 2},
+			"bob":   {LastPlayed: last.Add(-time.Hour), Count: 1},
+		}},
+	}}, []config.PathMapping{{Remote: "/movies", Local: e.movies}})
+
+	sp := e.scan(t).Space
+	if !sp.Watched || len(sp.Titles) != 1 {
+		t.Fatalf("watched=%v titles=%+v", sp.Watched, sp.Titles)
+	}
+	w := sp.Titles[0].Watch
+	if w == nil || !w.Last.Equal(last) || w.Plays != 3 || len(w.Users) != 2 || w.Users[0] != "alice" {
+		t.Fatalf("watch %+v", w)
+	}
+	if !sp.Titles[0].Added.Equal(time.Date(2021, 5, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("added %v", sp.Titles[0].Added)
+	}
+}
+
+func TestJellyfinWithoutMatchesWarns(t *testing.T) {
+	e := setup(t)
+	e.addJellyfin(t, &fake.Jellyfin{APIKey: "jf", Users: []string{"alice"}, Items: []fake.JellyfinItem{
+		{Type: "Movie", Path: "/elsewhere/Kept (2020)/Kept.mkv"},
+	}}, nil)
+	res := e.scan(t)
+	if res.Space.Watched || res.Space.Titles[0].Watch != nil {
+		t.Fatalf("watch history without matching paths: %+v", res.Space.Titles[0])
+	}
+	if len(res.Warnings) == 0 || !strings.Contains(res.Warnings[len(res.Warnings)-1], "path mappings") {
+		t.Fatalf("warnings %v", res.Warnings)
 	}
 }

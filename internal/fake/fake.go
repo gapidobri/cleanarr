@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Media struct {
@@ -20,6 +21,14 @@ type Media struct {
 	Files []string // absolute paths of tracked files
 	// Quality is reported for every file, e.g. Bluray-1080p.
 	Quality string
+	Added   time.Time
+}
+
+func added(t time.Time) string {
+	if t.IsZero() {
+		return "0001-01-01T00:00:00Z"
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 func quality(name string) map[string]any {
@@ -64,7 +73,7 @@ func (a *Arr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "movie":
 		var out []map[string]any
 		for _, m := range a.Media {
-			mv := map[string]any{"id": m.ID, "title": m.Title, "year": m.Year, "path": m.Path, "hasFile": len(m.Files) > 0}
+			mv := map[string]any{"id": m.ID, "title": m.Title, "year": m.Year, "path": m.Path, "hasFile": len(m.Files) > 0, "added": added(m.Added)}
 			if len(m.Files) > 0 {
 				mv["movieFile"] = map[string]any{"path": m.Files[0], "relativePath": filepath.Base(m.Files[0]), "quality": quality(m.Quality)}
 			}
@@ -74,7 +83,7 @@ func (a *Arr) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "series":
 		var out []map[string]any
 		for _, m := range a.Media {
-			out = append(out, map[string]any{"id": m.ID, "title": m.Title, "year": m.Year, "path": m.Path})
+			out = append(out, map[string]any{"id": m.ID, "title": m.Title, "year": m.Year, "path": m.Path, "added": added(m.Added)})
 		}
 		writeJSON(w, out)
 	case "episodefile":
@@ -190,6 +199,57 @@ func (q *Qbit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		q.Torrents = kept
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// JellyfinPlay is one user's play state of an item.
+type JellyfinPlay struct {
+	LastPlayed time.Time
+	Count      int
+}
+
+type JellyfinItem struct {
+	Type  string // Movie or Episode
+	Path  string
+	Plays map[string]JellyfinPlay // user name -> play
+}
+
+type Jellyfin struct {
+	APIKey string
+	Users  []string
+	Items  []JellyfinItem
+}
+
+func (j *Jellyfin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !strings.Contains(r.Header.Get("Authorization"), `Token="`+j.APIKey+`"`) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	switch r.URL.Path {
+	case "/System/Info":
+		writeJSON(w, map[string]string{"ServerName": "fake", "Version": "10.10.0"})
+	case "/Users":
+		out := []map[string]string{}
+		for _, u := range j.Users {
+			out = append(out, map[string]string{"Id": "id-" + u, "Name": u})
+		}
+		writeJSON(w, out)
+	case "/Items":
+		user := strings.TrimPrefix(r.URL.Query().Get("userId"), "id-")
+		start, _ := strconv.Atoi(r.URL.Query().Get("StartIndex"))
+		limit, _ := strconv.Atoi(r.URL.Query().Get("Limit"))
+		items := []map[string]any{}
+		for i := start; i < len(j.Items) && (limit == 0 || i < start+limit); i++ {
+			it := j.Items[i]
+			ud := map[string]any{"PlayCount": 0, "Played": false}
+			if p, ok := it.Plays[user]; ok {
+				ud = map[string]any{"PlayCount": p.Count, "Played": p.Count > 0, "LastPlayedDate": p.LastPlayed.UTC().Format("2006-01-02T15:04:05.0000000Z")}
+			}
+			items = append(items, map[string]any{"Type": it.Type, "Path": it.Path, "UserData": ud})
+		}
+		writeJSON(w, map[string]any{"Items": items, "TotalRecordCount": len(j.Items)})
 	default:
 		http.NotFound(w, r)
 	}

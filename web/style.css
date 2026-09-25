@@ -322,6 +322,11 @@ details.plan-list li { overflow-wrap: anywhere; padding: 2px 0; }
 .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--free); }
 .tab-note { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
 .more { margin-top: 12px; }
+.cats-label { align-self: center; color: var(--muted); font-size: 13px; margin-right: 4px; }
+.warn-note { color: var(--warn); }
+.warn-note a { color: inherit; }
+td.watched { white-space: nowrap; }
+td.watched .never { color: var(--warn); }
 
 .space-table td { vertical-align: middle; }
 .space-table tr.row.file { cursor: default; }

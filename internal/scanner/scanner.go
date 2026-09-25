@@ -31,6 +31,13 @@ const (
 	DownloadLeftover Category = "download_leftover"
 )
 
+// Watch is the watch history of a movie or series across media servers.
+type Watch struct {
+	Last  time.Time `json:"last,omitzero"` // zero when never played
+	Users []string  `json:"users"`         // who played it
+	Plays int       `json:"plays"`
+}
+
 // Key identifies file data independently of its path. Hardlinks share the
 // inode, size and modification time. The device number is left out on purpose
 // because the same NFS export mounted twice reports different devices.
@@ -114,7 +121,10 @@ type Input struct {
 	ItemDirs      map[string]arr.Ref
 	Tracked       map[string]arr.Ref
 	// Quality maps tracked files to the quality name the *arr app reports.
-	Quality      map[string]string
+	Quality map[string]string
+	// Activity is the watch history of movie and series folders known to a
+	// media server.
+	Activity     map[string]Watch
 	Torrents     []Torrent
 	Excluded     []string
 	IgnoredNames []string

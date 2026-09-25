@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"cleanarr/internal/arr"
 )
@@ -20,6 +21,8 @@ type Space struct {
 	Volumes   []VolumeUsage  `json:"volumes"`
 	Titles    []TitleUsage   `json:"titles"`
 	Qualities []QualityUsage `json:"qualities"`
+	// Watched is true when titles carry watch history from a media server.
+	Watched bool `json:"watched"`
 
 	dirs   map[string]*dirUsage
 	tops   []string
@@ -58,6 +61,9 @@ type TitleUsage struct {
 	// Other is what else the folder holds: extras, old versions, samples.
 	Other     int64         `json:"other"`
 	Qualities []QualityPart `json:"qualities"`
+	Added     time.Time     `json:"added,omitzero"`
+	// Watch is set when a media server knows the title.
+	Watch *Watch `json:"watch,omitempty"`
 }
 
 type QualityPart struct {
@@ -113,7 +119,7 @@ type DirListing struct {
 const maxDirEntries = 500
 
 func (s *scan) space() *Space {
-	sp := &Space{Classes: []SpaceClass{}, Volumes: []VolumeUsage{}, Titles: []TitleUsage{}, Qualities: []QualityUsage{},
+	sp := &Space{Watched: s.in.Activity != nil, Classes: []SpaceClass{}, Volumes: []VolumeUsage{}, Titles: []TitleUsage{}, Qualities: []QualityUsage{},
 		dirs: map[string]*dirUsage{}, titles: map[string]string{}}
 	for dir, ref := range s.in.ItemDirs {
 		sp.titles[dir] = ref.Title
@@ -262,7 +268,11 @@ func (s *scan) space() *Space {
 		if t == nil {
 			t = &titleAcc{TitleUsage: &TitleUsage{
 				Title: ref.Title, Instance: ref.InstanceName, Kind: string(ref.Kind), Class: cl.ID, Path: itemDirOf[tk],
+				Added: ref.Added,
 			}, quality: map[string]int64{}}
+			if w, ok := s.in.Activity[t.Path]; ok {
+				t.Watch = &w
+			}
 			titles[tk] = t
 		}
 		t.Size += f.Size

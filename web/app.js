@@ -481,6 +481,7 @@ const space = {
   path: "",
   arr: "", // class id filter on the Titles tab
   quality: "", // quality filter on the Titles tab
+  unwatched: 0, // days; lists titles not watched for that long
   sort: { key: "size", dir: -1 },
   showAll: false,
 };
@@ -608,27 +609,57 @@ function sortTh(key, label, cls = "") {
   return `<th class="sortable ${cls}" data-space-sort="${key}"${sorted}>${label}</th>`;
 }
 
+const UNWATCHED = [[0, "Any time"], [90, "3 months"], [180, "6 months"], [365, "1 year"], [730, "2 years"]];
+const DAY = 24 * 3600 * 1000;
+
+// notWatchedSince reports whether nobody played t since cutoff (a time in
+// ms). Titles added after cutoff or unknown to Jellyfin do not count.
+function notWatchedSince(t, cutoff) {
+  if (!t.watch) return false;
+  if (t.added && new Date(t.added).getTime() > cutoff) return false;
+  return !t.watch.last || new Date(t.watch.last).getTime() < cutoff;
+}
+
+function watchedHTML(t) {
+  const added = t.added ? `<div class="sub" title="${esc(fmtDate(t.added))}">added ${esc(timeAgo(t.added))}</div>` : "";
+  const w = t.watch;
+  if (!w) return `<span class="faint" title="Jellyfin has no item in this folder">Not in Jellyfin</span>${added}`;
+  if (w.last) {
+    const who = w.users.length ? `Watched by ${w.users.join(", ")}` : "";
+    return `<span title="${esc(fmtDate(w.last))}${who ? `\n${esc(who)}` : ""}">${esc(timeAgo(w.last))}</span>${added}`;
+  }
+  if (w.users.length) return `<span class="muted" title="Watched by ${esc(w.users.join(", "))}">Marked watched</span>${added}`;
+  return `<span class="never">Never</span>${added}`;
+}
+
 function titlesHTML() {
   const d = space.data;
   const q = spaceQuery();
   const color = Object.fromEntries(d.classes.map((c) => [c.id, c.color]));
   const arrs = d.classes.filter((c) => c.id.startsWith("arr:") && c.size > 0);
+  const cutoff = Date.now() - space.unwatched * DAY;
   let list = d.titles.filter((t) => (!space.arr || t.class === space.arr)
     && (!space.quality || t.qualities.some((x) => x.name === space.quality))
+    && (!space.unwatched || notWatchedSince(t, cutoff))
     && (!q || [t.title, t.instance, t.path, ...t.qualities.map((x) => x.name)].some((v) => v && v.toLowerCase().includes(q))));
   const { key, dir } = space.sort;
-  const val = (t) => ({ title: t.title.toLowerCase(), files: t.files, perFile: t.size / t.files, other: t.other, quality: (t.qualities[0]?.name || "").toLowerCase() })[key] ?? t.size;
+  const val = (t) => ({ title: t.title.toLowerCase(), files: t.files, perFile: t.size / t.files, other: t.other, quality: (t.qualities[0]?.name || "").toLowerCase(),
+    watched: t.watch ? (t.watch.last ? new Date(t.watch.last).getTime() : 0) : -1 })[key] ?? t.size;
   list.sort((a, b) => { const x = val(a), y = val(b); return x < y ? -dir : x > y ? dir : 0; });
   const total = list.reduce((a, t) => a + t.size, 0);
   const max = Math.max(...list.map((t) => t.size), 1);
   const shown = space.showAll ? list : list.slice(0, 100);
 
-  const chips = arrs.length > 1 || space.quality ? `<div class="cats">
+  const watchChips = d.watched ? `<div class="cats"><span class="cats-label">Not watched in</span>
+    ${UNWATCHED.map(([days, label]) => `<button class="cat" data-act="space-unwatched" data-days="${days}" aria-pressed="${space.unwatched === days}">${label}</button>`).join("")}
+  </div>` : state.config?.jellyfin?.some((j) => j.enabled)
+    ? `<p class="tab-note warn-note">No watch history from Jellyfin. See the scan warnings on the <a href="#/system">System</a> page.</p>` : "";
+  const chips = watchChips + (arrs.length > 1 || space.quality ? `<div class="cats">
     ${arrs.length > 1 ? `<button class="cat" data-act="space-arr" data-class="" aria-pressed="${!space.arr}">All</button>
     ${arrs.map((c) => `<button class="cat" data-act="space-arr" data-class="${esc(c.id)}" aria-pressed="${space.arr === c.id}" style="--cat:${c.color}"><span class="sw"></span>${esc(c.label)}</button>`).join("")}` : ""}
     ${space.quality ? `<button class="cat" data-act="space-quality" data-name="" aria-pressed="true" title="Show every quality">${esc(space.quality)}<span class="n">Remove</span></button>` : ""}
-  </div>` : "";
-  if (!list.length) return chips + `<div class="empty"><h2>No titles</h2><p>${q || space.arr || space.quality ? "No titles match the filter." : "Sonarr and Radarr track no files in the scanned folders."}</p></div>`;
+  </div>` : "");
+  if (!list.length) return chips + `<div class="empty"><h2>No titles</h2><p>${q || space.arr || space.quality || space.unwatched ? "No titles match the filter." : "Sonarr and Radarr track no files in the scanned folders."}</p></div>`;
   const rows = shown.map((t) => {
     const qual = t.qualities.length ? `${esc(t.qualities[0].name)}${t.qualities.length > 1 ? ` <span class="faint" title="${esc(t.qualities.slice(1).map((x) => `${x.name}: ${fmtBytes(x.size)}`).join("\n"))}">+${t.qualities.length - 1}</span>` : ""}` : "";
     return `
@@ -638,13 +669,16 @@ function titlesHTML() {
         <td class="num col-mod">${t.files.toLocaleString()}</td>
         <td class="num col-mod muted">${fmtBytes(t.size / t.files)}</td>
         <td class="num col-marks muted" title="Subtitles, extras and old versions in the folder">${t.other >= 1 << 20 ? fmtBytes(t.other) : ""}</td>
+        ${d.watched ? `<td class="num watched">${watchedHTML(t)}</td>` : ""}
         <td class="num size-cell"><div class="sz"><span>${fmtBytes(t.size)}</span><div class="hbar"><i style="--c:${color[t.class]};width:${pctOf(t.size, max)}%"></i></div></div></td>
       </tr>`;
   }).join("");
   const more = list.length > shown.length
     ? `<div class="more"><button class="btn" data-act="space-all">Show all ${list.length.toLocaleString()} titles</button></div>` : "";
   return chips + `
-    <p class="tab-note">${plural(list.length, "title")}, ${fmtBytes(total)}. Select a title to see its folder.</p>
+    <p class="tab-note">${space.unwatched
+      ? `<b>${plural(list.length, "title")}, ${fmtBytes(total)}</b>, not watched by anyone in ${UNWATCHED.find(([days]) => days === space.unwatched)[1]} and added before that.`
+      : `${plural(list.length, "title")}, ${fmtBytes(total)}.`} Select a title to see its folder.</p>
     <div class="table-wrap"><table class="space-table">
       <thead><tr>
         ${sortTh("title", "Title")}
@@ -652,6 +686,7 @@ function titlesHTML() {
         ${sortTh("files", "Files", "num col-mod")}
         ${sortTh("perFile", "Per file", "num col-mod")}
         ${sortTh("other", "Other in folder", "num col-marks")}
+        ${d.watched ? sortTh("watched", "Last watched", "num") : ""}
         ${sortTh("size", "Size", "num size-cell")}
       </tr></thead>
       <tbody>${rows}</tbody>
@@ -892,14 +927,16 @@ function renderActivity() {
 
 /* ---------- settings ---------- */
 
-const KIND_LABEL = { sonarr: "Sonarr", radarr: "Radarr", qbit: "qBittorrent" };
+const KIND_LABEL = { sonarr: "Sonarr", radarr: "Radarr", qbit: "qBittorrent", jellyfin: "Jellyfin" };
 
 function instanceList(kind, list) {
   const head = `<div class="section-head"><h2>${KIND_LABEL[kind]}</h2><button class="btn" data-act="add-instance" data-kind="${kind}">${icon("plus")}Add ${KIND_LABEL[kind]}</button></div>`;
   if (!list.length) {
     const hint = kind === "qbit"
       ? "Connect qBittorrent to find old versions that are still seeding and to remove torrents together with their files."
-      : `No ${KIND_LABEL[kind]} instance yet.`;
+      : kind === "jellyfin"
+        ? "Connect Jellyfin to see on the Space page when each movie and series was last watched, and which ones nobody watches."
+        : `No ${KIND_LABEL[kind]} instance yet.`;
     return head + `<div class="none-yet">${hint}</div>`;
   }
   return head + `<div class="instances">${list.map((inst, i) => `
@@ -912,6 +949,10 @@ function instanceList(kind, list) {
 
 const lines = (arr) => esc((arr || []).join("\n"));
 const parseLines = (s) => s.split("\n").map((x) => x.trim()).filter(Boolean);
+const parseMappings = (s) => parseLines(s).map((l) => {
+  const [remote, local] = l.split("=>").map((x) => (x || "").trim());
+  return { remote, local };
+});
 
 function renderSettings() {
   const c = state.config;
@@ -922,6 +963,7 @@ function renderSettings() {
     ${instanceList("sonarr", c.sonarr)}
     ${instanceList("radarr", c.radarr)}
     ${instanceList("qbit", c.qbittorrent)}
+    ${instanceList("jellyfin", c.jellyfin)}
 
     <h2 style="margin-top:40px">Paths</h2>
     <form class="form" id="paths-form">
@@ -969,6 +1011,7 @@ function renderSettings() {
 
 function instanceForm(kind, inst) {
   const isQ = kind === "qbit";
+  const isJ = kind === "jellyfin";
   const maps = (inst.pathMappings || []).map((m) => `${m.remote} => ${m.local}`).join("\n");
   return `
     <form id="instance-form">
@@ -976,7 +1019,7 @@ function instanceForm(kind, inst) {
       <div class="modal-body">
         <div class="row-fields">
           <div class="field"><label for="i-name">Name</label><input type="text" id="i-name" name="name" required value="${esc(inst.name)}" placeholder="${isQ ? "qBittorrent" : KIND_LABEL[kind] + " 4K"}"></div>
-          <div class="field"><label for="i-url">URL</label><input type="url" id="i-url" name="url" required value="${esc(inst.url)}" placeholder="http://192.168.1.10:${kind === "sonarr" ? 8989 : kind === "radarr" ? 7878 : 8080}"></div>
+          <div class="field"><label for="i-url">URL</label><input type="url" id="i-url" name="url" required value="${esc(inst.url)}" placeholder="http://192.168.1.10:${{ sonarr: 8989, radarr: 7878, jellyfin: 8096 }[kind] || 8080}"></div>
         </div>
         ${isQ ? `
         <div class="row-fields">
@@ -989,7 +1032,9 @@ function instanceForm(kind, inst) {
           <div class="help">Only needed when qBittorrent sees different paths than Cleanarr. One mapping per line: qBittorrent path => Cleanarr path.</div></div>
         ` : `
         <div class="field"><label for="i-key">API key</label><input type="text" id="i-key" name="apiKey" required value="${esc(inst.apiKey)}" autocomplete="off" spellcheck="false">
-          <div class="help">In ${KIND_LABEL[kind]} under Settings, General.</div></div>`}
+          <div class="help">${isJ ? "In Jellyfin under Dashboard, API Keys. Cleanarr only reads from Jellyfin." : `In ${KIND_LABEL[kind]} under Settings, General.`}</div></div>
+        ${isJ ? `<div class="field"><label for="i-maps">Path mappings</label><textarea id="i-maps" name="pathMappings" spellcheck="false" placeholder="/movies => /data/media/movies">${esc(maps)}</textarea>
+          <div class="help">Only needed when Jellyfin sees your library at different paths than Cleanarr. One mapping per line: Jellyfin path => Cleanarr path.</div></div>` : ""}`}
         <div class="check-field"><input type="checkbox" id="i-enabled" name="enabled" ${inst.enabled ? "checked" : ""}><label for="i-enabled">Enabled</label></div>
       </div>
       <div class="modal-foot">
@@ -1024,13 +1069,11 @@ function readInstance() {
     inst.username = f.username.value;
     inst.password = f.password.value;
     inst.categories = f.categories.value.split(",").map((x) => x.trim()).filter(Boolean);
-    inst.pathMappings = parseLines(f.pathMappings.value).map((l) => {
-      const [remote, local] = l.split("=>").map((x) => (x || "").trim());
-      return { remote, local };
-    });
+    inst.pathMappings = parseMappings(f.pathMappings.value);
   } else {
     inst.apiKey = f.apiKey.value;
-    inst.kind = kind;
+    if (kind === "jellyfin") inst.pathMappings = parseMappings(f.pathMappings.value);
+    else inst.kind = kind;
   }
   return inst;
 }
@@ -1067,7 +1110,7 @@ async function testInstance() {
   out.className = "test-result";
   out.textContent = "Testing…";
   try {
-    const r = await api("POST", editing.kind === "qbit" ? "/api/test/qbit" : "/api/test/arr", readInstance());
+    const r = await api("POST", { qbit: "/api/test/qbit", jellyfin: "/api/test/jellyfin" }[editing.kind] || "/api/test/arr", readInstance());
     out.className = "test-result ok";
     out.textContent = `Connected to ${r.message}`;
   } catch (e) {
@@ -1146,6 +1189,11 @@ document.addEventListener("click", async (e) => {
         space.arr = act.dataset.class;
         space.tab = "titles";
         return render();
+      case "space-unwatched":
+        space.unwatched = Number(act.dataset.days);
+        space.showAll = false;
+        if (space.unwatched) space.sort = { key: "size", dir: -1 };
+        return render();
       case "space-quality":
         space.quality = act.dataset.name;
         space.tab = "titles";
@@ -1161,7 +1209,7 @@ document.addEventListener("click", async (e) => {
   const sth = e.target.closest("th[data-space-sort]");
   if (sth) {
     const key = sth.dataset.spaceSort;
-    space.sort = space.sort.key === key ? { key, dir: -space.sort.dir } : { key, dir: ["title", "quality"].includes(key) ? 1 : -1 };
+    space.sort = space.sort.key === key ? { key, dir: -space.sort.dir } : { key, dir: ["title", "quality", "watched"].includes(key) ? 1 : -1 };
     return render();
   }
   const th = e.target.closest("th[data-sort]");

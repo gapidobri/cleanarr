@@ -49,10 +49,38 @@ type QbitInstance struct {
 	PathMappings []PathMapping `json:"pathMappings"` // qBittorrent path -> local path
 }
 
+// JellyfinInstance is a Jellyfin server, used for watch history.
+type JellyfinInstance struct {
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	URL          string        `json:"url"`
+	APIKey       string        `json:"apiKey"`
+	Enabled      bool          `json:"enabled"`
+	PathMappings []PathMapping `json:"pathMappings"` // Jellyfin path -> local path
+}
+
+// MapPath rewrites p with the longest matching mapping.
+func MapPath(p string, mappings []PathMapping) string {
+	p = filepath.Clean(filepath.FromSlash(p))
+	best := -1
+	out := p
+	for _, m := range mappings {
+		remote := filepath.Clean(m.Remote)
+		if p == remote || strings.HasPrefix(p, remote+string(filepath.Separator)) {
+			if len(remote) > best {
+				best = len(remote)
+				out = filepath.Join(filepath.Clean(m.Local), strings.TrimPrefix(p, remote))
+			}
+		}
+	}
+	return out
+}
+
 type Config struct {
-	Sonarr []ArrInstance  `json:"sonarr"`
-	Radarr []ArrInstance  `json:"radarr"`
-	Qbit   []QbitInstance `json:"qbittorrent"`
+	Sonarr   []ArrInstance      `json:"sonarr"`
+	Radarr   []ArrInstance      `json:"radarr"`
+	Qbit     []QbitInstance     `json:"qbittorrent"`
+	Jellyfin []JellyfinInstance `json:"jellyfin"`
 
 	// ExtraLibraryPaths are scanned in addition to the *arr root folders.
 	ExtraLibraryPaths []string `json:"extraLibraryPaths"`
@@ -75,6 +103,7 @@ func Default() Config {
 		Sonarr:             []ArrInstance{},
 		Radarr:             []ArrInstance{},
 		Qbit:               []QbitInstance{},
+		Jellyfin:           []JellyfinInstance{},
 		ExtraLibraryPaths:  []string{},
 		DownloadPaths:      []string{},
 		ExcludedPaths:      []string{},
@@ -93,6 +122,16 @@ func (c *Config) Arrs() []ArrInstance {
 			if a.Enabled {
 				out = append(out, a)
 			}
+		}
+	}
+	return out
+}
+
+func (c *Config) EnabledJellyfin() []JellyfinInstance {
+	var out []JellyfinInstance
+	for _, j := range c.Jellyfin {
+		if j.Enabled {
+			out = append(out, j)
 		}
 	}
 	return out
@@ -141,17 +180,20 @@ func (c *Config) Validate() error {
 			q.ID = newID()
 		}
 		q.Categories = cleanList(q.Categories, false)
-		var maps []PathMapping
-		for _, m := range q.PathMappings {
-			if strings.TrimSpace(m.Remote) == "" || strings.TrimSpace(m.Local) == "" {
-				continue
-			}
-			maps = append(maps, PathMapping{Remote: strings.TrimSpace(m.Remote), Local: strings.TrimSpace(m.Local)})
+		q.PathMappings = cleanMappings(q.PathMappings)
+	}
+	for i := range c.Jellyfin {
+		j := &c.Jellyfin[i]
+		j.Name = strings.TrimSpace(j.Name)
+		j.URL = strings.TrimRight(strings.TrimSpace(j.URL), "/")
+		j.APIKey = strings.TrimSpace(j.APIKey)
+		if j.Name == "" || j.URL == "" || j.APIKey == "" {
+			return errors.New("Jellyfin instance needs a name, URL and API key")
 		}
-		if maps == nil {
-			maps = []PathMapping{}
+		if j.ID == "" {
+			j.ID = newID()
 		}
-		q.PathMappings = maps
+		j.PathMappings = cleanMappings(j.PathMappings)
 	}
 	c.ExtraLibraryPaths = cleanList(c.ExtraLibraryPaths, true)
 	c.DownloadPaths = cleanList(c.DownloadPaths, true)
@@ -171,6 +213,17 @@ func (c *Config) Validate() error {
 		return errors.New("hours must not be negative")
 	}
 	return nil
+}
+
+func cleanMappings(in []PathMapping) []PathMapping {
+	out := []PathMapping{}
+	for _, m := range in {
+		if strings.TrimSpace(m.Remote) == "" || strings.TrimSpace(m.Local) == "" {
+			continue
+		}
+		out = append(out, PathMapping{Remote: strings.TrimSpace(m.Remote), Local: strings.TrimSpace(m.Local)})
+	}
+	return out
 }
 
 func cleanList(in []string, paths bool) []string {

@@ -177,8 +177,41 @@ func main() {
 	mk(filepath.Join(tor, "tv-sonarr", "Chernobyl.S01.2160p.WEB-DL.x265", "Chernobyl.S01E02.2160p.WEB-DL.x265.mkv"), 5.6)
 	mk(filepath.Join(tor, "radarr", "Oppenheimer.2023.1080p.WEB.part"), 3.3)
 
+	// Jellyfin sees the library at /media. Days since last watched per
+	// title; missing titles were never watched.
+	jf := &fake.Jellyfin{APIKey: "jellyfin", Users: []string{"alex", "sam"}}
+	watched := map[string]struct {
+		days int
+		who  []string
+	}{
+		"Arrival (2016)": {20, []string{"alex"}}, "Blade Runner 2049 (2017)": {400, []string{"sam"}},
+		"Dune (2021)": {3, []string{"alex", "sam"}}, "The Thing (1982)": {250, []string{"alex"}},
+		"Severance": {10, []string{"alex", "sam"}}, "The Bear": {300, []string{"sam"}},
+	}
+	for _, a := range []*fake.Arr{radarr, radarr4k, sonarr} {
+		for i := range a.Media {
+			a.Media[i].Added = time.Now().Add(-time.Duration(200+i*150) * 24 * time.Hour)
+		}
+		for _, m := range a.Media {
+			w := watched[filepath.Base(m.Path)]
+			if a == radarr4k {
+				w = watched[""] // the 4K copy is never played
+			}
+			for _, f := range m.Files {
+				it := fake.JellyfinItem{Type: "Movie", Path: "/media" + strings.TrimPrefix(f, filepath.Join(data, "media")), Plays: map[string]fake.JellyfinPlay{}}
+				if a == sonarr {
+					it.Type = "Episode"
+				}
+				for _, u := range w.who {
+					it.Plays[u] = fake.JellyfinPlay{LastPlayed: time.Now().Add(-time.Duration(w.days) * 24 * time.Hour), Count: 1}
+				}
+				jf.Items = append(jf.Items, it)
+			}
+		}
+	}
+
 	ports := map[string]http.Handler{
-		"18989": sonarr, "17878": radarr, "17879": radarr4k, "18080": qb,
+		"18989": sonarr, "17878": radarr, "17879": radarr4k, "18080": qb, "18096": jf,
 	}
 	cfg := config.Default()
 	cfg.Sonarr = []config.ArrInstance{{Name: "Sonarr", URL: "http://127.0.0.1:18989", APIKey: "sonarr", Enabled: true}}
@@ -187,6 +220,8 @@ func main() {
 		{Name: "Radarr 4K", URL: "http://127.0.0.1:17879", APIKey: "radarr4k", Enabled: true},
 	}
 	cfg.Qbit = []config.QbitInstance{{Name: "qBittorrent", URL: "http://127.0.0.1:18080", Enabled: true, Categories: []string{"radarr", "tv-sonarr"}}}
+	cfg.Jellyfin = []config.JellyfinInstance{{Name: "Jellyfin", URL: "http://127.0.0.1:18096", APIKey: "jellyfin", Enabled: true,
+		PathMappings: []config.PathMapping{{Remote: "/media", Local: filepath.Join(data, "media")}}}}
 	cfg.DownloadPaths = []string{tor}
 	must(cfg.Validate())
 	cfgDir := filepath.Join(root, "config")

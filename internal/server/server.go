@@ -41,6 +41,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/config", s.putConfig)
 	mux.HandleFunc("POST /api/test/arr", s.testArr)
 	mux.HandleFunc("POST /api/test/qbit", s.testQbit)
+	mux.HandleFunc("POST /api/test/jellyfin", s.testJellyfin)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, errors.New("not found"))
 	})
@@ -243,6 +244,22 @@ func (s *Server) testQbit(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	msg, err := cleaner.TestQbit(ctx, inst)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": msg})
+}
+
+func (s *Server) testJellyfin(w http.ResponseWriter, r *http.Request) {
+	var inst config.JellyfinInstance
+	if err := readJSON(r, &inst); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	msg, err := cleaner.TestJellyfin(ctx, inst)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
